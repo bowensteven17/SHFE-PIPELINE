@@ -40,6 +40,7 @@ gcloud services enable \
   cloudbuild.googleapis.com \
   iam.googleapis.com \
   storage-component.googleapis.com \
+  aiplatform.googleapis.com \
   --project=$PROJECT_ID
 
 # Create GCS Bucket if it doesn't exist
@@ -52,10 +53,10 @@ else
 fi
 echo ""
 
-# Securely get the Anthropic API key
-read -sp "🔑 Please enter your Anthropic API Key: " ANTHROPIC_API_KEY
+# Securely get the Gemini API key
+read -sp "🔑 Please enter your Gemini API Key: " GEMINI_API_KEY
 echo ""
-if [ -z "$ANTHROPIC_API_KEY" ]; then
+if [ -z "$GEMINI_API_KEY" ]; then
     echo "❌ API Key cannot be empty. Aborting."
     exit 1
 fi
@@ -74,7 +75,7 @@ gcloud run deploy $SERVICE_NAME \
   --allow-unauthenticated \
   --project=$PROJECT_ID \
   --set-env-vars="STORAGE_BUCKET=$BUCKET_NAME" \
-  --set-env-vars="ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" \
+  --set-env-vars="GEMINI_API_KEY=$GEMINI_API_KEY" \
   --cpu=2 \
   --memory=2Gi \
   --timeout=900 # 15 minutes, as scraping can be long

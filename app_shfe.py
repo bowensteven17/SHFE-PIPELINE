@@ -13,7 +13,7 @@ from flask import Flask, jsonify, request
 from google.cloud import storage
 
 # Import the refactored scraper
-from shfe_scraper import LLMEnhancedSHFEScraper
+from shfe_scraper import LLMEnhancedSHFEScraper #
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -25,12 +25,12 @@ app = Flask(__name__)
 PORT = int(os.environ.get('PORT', 8080))
 PROJECT_ID = os.environ.get('GOOGLE_CLOUD_PROJECT')
 BUCKET_NAME = os.environ.get('STORAGE_BUCKET')
-ANTHROPIC_API_KEY = os.environ.get('ANTHROPIC_API_KEY') # Securely loaded from environment
+GOOGLE_GEMINI_API_KEY = os.environ.get('GOOGLE_GEMINI_API_KEY') # Updated to use GOOGLE_GEMINI_API_KEY
 
 if not BUCKET_NAME:
     raise ValueError("STORAGE_BUCKET environment variable is not set.")
-if not ANTHROPIC_API_KEY:
-    logger.warning("ANTHROPIC_API_KEY environment variable is not set. Claude parsing will be disabled.")
+if not GOOGLE_GEMINI_API_KEY:
+    logger.warning("GOOGLE_GEMINI_API_KEY environment variable is not set. Gemini parsing will be disabled.")
 
 
 def upload_to_gcs(local_file_path: str, bucket_name: str) -> str:
@@ -77,15 +77,15 @@ def run_shfe_pipeline():
         with tempfile.TemporaryDirectory() as temp_dir:
             logger.info(f"Using temporary directory: {temp_dir}")
             
-            # Initialize and run the scraper
+            # Initialize and run the scraper with the Gemini API Key
             scraper = LLMEnhancedSHFEScraper(
                 start_date=start_date,
-                anthropic_api_key=ANTHROPIC_API_KEY,
+                gemini_api_key=GOOGLE_GEMINI_API_KEY, # Updated to use the new variable
                 output_dir=temp_dir
             )
             
             # The run_scraper method now returns the path to the final ZIP file
-            zip_file_path = scraper.run_scraper()
+            zip_file_path = scraper.run_scraper() #
             
             if zip_file_path and os.path.exists(zip_file_path):
                 # Upload the final ZIP to GCS
