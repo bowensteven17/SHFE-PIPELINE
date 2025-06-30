@@ -30,15 +30,8 @@ except ImportError:
     print("⚠️ Anthropic not installed. Run: pip install anthropic")
     ANTHROPIC_AVAILABLE = False
 
-# ==================== CONFIGURATION (now passed via __init__) ====================
-# START_DATE = "2025-01-10"
-# DATASET_NAME = "SHFEMR"
-# OUTPUT_DIR = "shfe_output"
-# ANTHROPIC_API_KEY = "..."
-# =================================================================================
-
 class SHFEDataExporter:
-    """Export data in runbook format"""
+    """Export data in runbook format with correct headers"""
     
     def __init__(self, dataset_name: str, output_dir: str):
         self.dataset_name = dataset_name
@@ -61,7 +54,7 @@ class SHFEDataExporter:
         return data_path, meta_path
     
     def _create_data_file(self, data_entries: List[Dict], filepath: str):
-        """Create DATA XLS file"""
+        """Create DATA XLS file with Bloomberg-style headers"""
         workbook = xlwt.Workbook(encoding='utf-8')
         worksheet = workbook.add_sheet('Data')
         
@@ -71,13 +64,27 @@ class SHFEDataExporter:
         
         for entry in data_entries:
             effective_date = entry['effective_date']
-            commodity = entry['commodity'].upper().replace(' ', '_').replace('-', '_')
+            commodity = entry['commodity'].upper().replace(' ', '').replace('-', '')
+            
+            # Handle special commodity name mappings to match reference format
+            commodity_mapping = {
+                'ALUMINUM': 'ALUMINIUM',
+                'NATURALRUBBER': 'NATURRUBBER',
+                'PETROLEUMASPHALT': 'PETASPHALT',
+                'BUTADIENERUBBER': 'BUTRUBBER',
+                'HOTROLLEDCOIL': 'HOTROLLCOIL',
+                'STAINLESSSTEEL': 'STAINLESSSTEEL'
+            }
+            
+            if commodity in commodity_mapping:
+                commodity = commodity_mapping[commodity]
             
             if effective_date not in data_by_date:
                 data_by_date[effective_date] = {}
             
-            hedging_code = f"{commodity}_HEDGING_MARGIN"
-            speculative_code = f"{commodity}_SPECULATIVE_MARGIN"
+            # Generate Bloomberg-style codes to match reference format
+            hedging_code = f"SHFEMR.{commodity}.HEDGERS.B"
+            speculative_code = f"SHFEMR.{commodity}.SPECULATORS.B"
             
             data_by_date[effective_date][hedging_code] = entry['hedging_percentage']
             data_by_date[effective_date][speculative_code] = entry['speculative_percentage']
@@ -85,14 +92,33 @@ class SHFEDataExporter:
             time_series_codes.add(hedging_code)
             time_series_codes.add(speculative_code)
         
-        # Write headers
+        # Write headers - dual header system to match reference format
         sorted_codes = sorted(time_series_codes)
-        worksheet.write(0, 0, "DATE")
-        worksheet.write(1, 0, "Reporting Date")
         
+        # Row 1: Technical codes (Bloomberg-style)
+        worksheet.write(0, 0, None)  # null for date column like reference
         for col_idx, code in enumerate(sorted_codes, 1):
             worksheet.write(0, col_idx, code)
-            description = code.replace('_', ' ').title()
+        
+        # Row 2: Human descriptions
+        worksheet.write(1, 0, None)  # null for date column like reference
+        for col_idx, code in enumerate(sorted_codes, 1):
+            # Parse the code to generate description
+            parts = code.split('.')
+            if len(parts) >= 3:
+                commodity_name = parts[1].replace('ALUMINIUM', 'Aluminium').replace('NATURRUBBER', 'Natural Rubber').replace('PETASPHALT', 'Petroleum Asphalt').replace('BUTRUBBER', 'Butadiene Rubber').replace('HOTROLLCOIL', 'Hot-rolled Coil').replace('STAINLESSSTEEL', 'Stainless Steel')
+                # Convert other commodity names to proper case
+                if commodity_name not in ['Aluminium', 'Natural Rubber', 'Petroleum Asphalt', 'Butadiene Rubber', 'Hot-rolled Coil', 'Stainless Steel']:
+                    commodity_name = commodity_name.title()
+                
+                transaction_type = parts[2].lower()
+                if transaction_type == 'hedgers':
+                    description = f"{commodity_name}: Margin ratio for hedging transactions"
+                else:  # speculators
+                    description = f"{commodity_name}: Margin ratio for speculative transactions"
+            else:
+                description = code.replace('_', ' ').title()
+            
             worksheet.write(1, col_idx, description)
         
         # Write data
@@ -105,10 +131,10 @@ class SHFEDataExporter:
                 worksheet.write(row_idx, col_idx, value)
         
         workbook.save(filepath)
-        print(f"✅ Created DATA file: {filepath}")
+        print(f"✅ Created DATA file with Bloomberg-style headers: {filepath}")
     
     def _create_meta_file(self, filepath: str, release_date: str):
-        """Create META XLS file"""
+        """Create META XLS file with correct descriptions"""
         workbook = xlwt.Workbook(encoding='utf-8')
         worksheet = workbook.add_sheet('Metadata')
         
@@ -120,16 +146,29 @@ class SHFEDataExporter:
         for col_idx, header in enumerate(headers):
             worksheet.write(0, col_idx, header)
         
-        # Sample metadata for common commodities
-        commodities = ['COPPER', 'ALUMINUM', 'ZINC', 'LEAD', 'NICKEL', 'TIN', 
-                      'ALUMINA', 'GOLD', 'SILVER', 'REBAR']
-        transaction_types = ['HEDGING', 'SPECULATIVE']
+        # Use exact commodity names from your corrected headers
+        commodities_with_correct_names = [
+            'Copper', 'Alumina', 'Lead', 'Zinc', 'Aluminium',  # Note: Aluminium not Aluminum
+            'Gold', 'Nickel', 'Rebar', 'Pulp', 'Natural Rubber', 
+            'Silver', 'Fuel Oil', 'Petroleum Asphalt ',  # Note: extra space
+            'Wire Rod', 'Tin', 'Butadiene Rubber', 'Hot-rolled Coil', 
+            'Stainless Steel'
+        ]
+        
+        transaction_types = [
+            ('HEDGING', 'hedging transactions'),
+            ('SPECULATIVE', 'speculative transactions')
+        ]
         
         row_idx = 1
-        for commodity in commodities:
-            for transaction_type in transaction_types:
-                timeseries_id = f"{commodity}_{transaction_type}_MARGIN"
-                description = f"{commodity.replace('_', ' ').title()} {transaction_type.title()} Margin Ratio"
+        for commodity in commodities_with_correct_names:
+            for transaction_code, transaction_desc in transaction_types:
+                # For timeseries ID, use normalized name (no extra spaces, use Aluminum for code)
+                normalized_commodity = commodity.strip().replace('Aluminium', 'Aluminum')
+                timeseries_id = f"{normalized_commodity.upper().replace(' ', '_').replace('-', '_')}_{transaction_code}_MARGIN"
+                
+                # For description, use exact display name
+                description = f"{commodity}: Margin ratio for {transaction_desc}"
                 
                 worksheet.write(row_idx, 0, timeseries_id)
                 worksheet.write(row_idx, 1, description)
@@ -143,7 +182,7 @@ class SHFEDataExporter:
                 row_idx += 1
         
         workbook.save(filepath)
-        print(f"✅ Created META file: {filepath}")
+        print(f"✅ Created META file with correct descriptions: {filepath}")
     
     def create_zip_archive(self, data_path: str, meta_path: str) -> str:
         """Create ZIP archive"""
