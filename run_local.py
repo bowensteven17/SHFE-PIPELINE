@@ -4,6 +4,7 @@ import getpass
 from datetime import datetime, timedelta
 
 # Import the main scraper class from the existing file
+# This file (shfe_scraper.py) should contain the Anthropic-based scraper
 from shfe_scraper import LLMEnhancedSHFEScraper
 
 def main():
@@ -15,14 +16,14 @@ def main():
 
     # --- Configuration ---
 
-    # 1. Get the Gemini API Key
+    # 1. Get the Anthropic API Key
     # The script will first check for the environment variable.
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        print("⚠️ GEMINI_API_KEY environment variable not found.")
+        print("⚠️ ANTHROPIC_API_KEY environment variable not found.")
         try:
             # Fallback to prompting the user if the variable isn't set
-            api_key = getpass.getpass("🔑 Please enter your Gemini API Key: ")
+            api_key = getpass.getpass("🔑 Please enter your Anthropic API Key: ")
         except (IOError, EOFError):
             print("\n❌ Could not read API key. Aborting.")
             return
@@ -32,27 +33,17 @@ def main():
         return
 
     # 2. Define the Start Date for scraping
-    # IMPROVED: Use a much broader date range to find margin adjustment notices
-    # Margin adjustments are typically announced during:
-    # - Holiday periods (Spring Festival, National Day, etc.)
-    # - Market volatility periods
-    # - Quarterly reviews
+    # Using a broad date range to find margin adjustment notices, which are
+    # typically announced during holiday periods or market volatility.
     
-    # Option 1: Start from beginning of current year
-    # start_date = f"{datetime.now().year}-01-01"
-    
-    # Option 2: Start from 6 months ago (more conservative)
-    start_date = (datetime.now() - timedelta(days=1800)).strftime('%Y-%m-%d')
-    
-    # Option 3: Start from a specific known period (e.g., 2024 data)
-    # start_date = "2024-01-01"
-    
+    # Start from 5 years ago to ensure a wide search window
+    # start_date = (datetime.now() - timedelta(days=1825)).strftime('%Y-%m-%d')
+    start_date = '2025-04-01'
     print(f"📅 Using start date for scraping: {start_date}")
     print(f"💡 Tip: Margin adjustment notices are typically found during:")
     print(f"   • Holiday periods (Spring Festival, National Day)")
     print(f"   • Market volatility periods")
     print(f"   • Quarterly or monthly reviews")
-    print(f"   • Try start_date='2024-01-01' for more historical data")
 
     # 3. Define the Local Output Directory
     # All files (CSV, XLS, ZIP) will be saved here.
@@ -62,10 +53,10 @@ def main():
 
     # --- Scraper Execution ---
     try:
-        # Initialize the scraper with our local configuration
+        # Initialize the scraper with our local configuration for Anthropic
         scraper = LLMEnhancedSHFEScraper(
             start_date=start_date,
-            gemini_api_key=api_key,
+            anthropic_api_key=api_key,
             output_dir=output_dir
         )
 
@@ -79,15 +70,15 @@ def main():
             # Additional success info
             print(f"\n📊 SUCCESS SUMMARY:")
             print(f"   📅 Date range searched: {start_date} to {datetime.now().strftime('%Y-%m-%d')}")
-            print(f"   📦 Output files ready for upload to cloud storage")
-            print(f"   💾 CSV data file: Available in output directory")
-            print(f"   📋 XLS data and metadata files: Included in ZIP")
+            print(f"   🤖 LLM Used: Anthropic (Claude)")
+            print(f"   💾 CSV data file: Available in the output directory")
+            print(f"   📋 XLS data and metadata files: Included in the ZIP archive")
         else:
             print("\n💡 Scraper ran, but no new data was found or no output file was generated.")
             print("\n🔍 TROUBLESHOOTING SUGGESTIONS:")
-            print("   1. Try a broader date range (e.g., start from 2024-01-01)")
-            print("   2. Check if margin adjustment notices exist in the date range")
-            print("   3. Verify the SHFE website structure hasn't changed")
+            print("   1. Try a different or broader date range.")
+            print("   2. Check if margin adjustment notices actually exist in the searched date range on the SHFE website.")
+            print("   3. Verify the SHFE website structure hasn't changed, preventing the scraper from finding notices.")
             print("   4. Look for notices with titles containing:")
             print("      • '关于调整...保证金比例...通知'")
             print("      • 'Notice on Adjusting the Margin Ratio'")
@@ -98,10 +89,10 @@ def main():
         traceback.print_exc()
         
         print(f"\n🔧 DEBUG SUGGESTIONS:")
-        print("   1. Check if Chrome/ChromeDriver is properly installed")
-        print("   2. Verify internet connectivity to SHFE website")
-        print("   3. Ensure Gemini API key is valid and has quota")
-        print("   4. Try running with a different date range")
+        print("   1. Check if Chrome/ChromeDriver is properly installed and in your PATH.")
+        print("   2. Verify your internet connection to the SHFE website.")
+        print("   3. Ensure your Anthropic API key is valid and has sufficient quota.")
+        print("   4. Make sure the 'anthropic' library is installed (`pip install anthropic`).")
 
 if __name__ == "__main__":
     main()

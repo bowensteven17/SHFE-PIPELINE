@@ -20,12 +20,12 @@ else
     PROJECT_ID=$1
 fi
 
-SERVICE_NAME="shfe-scraper"
+SERVICE_NAME="shfe-scraper-anthropic" # Updated service name for clarity
 REGION="us-central1" # Or your preferred region
-BUCKET_NAME="${PROJECT_ID}-shfe-data-bucket" # Define a bucket name
+BUCKET_NAME="${PROJECT_ID}-shfe-data-bucket" # Define a unique bucket name
 
 echo "================================================="
-echo "🚀 Deploying SHFE Scraper to GCP Project: $PROJECT_ID"
+echo "🚀 Deploying SHFE Scraper (Anthropic) to GCP Project: $PROJECT_ID"
 echo "================================================="
 echo "Service Name: $SERVICE_NAME"
 echo "Region: $REGION"
@@ -40,7 +40,6 @@ gcloud services enable \
   cloudbuild.googleapis.com \
   iam.googleapis.com \
   storage-component.googleapis.com \
-  aiplatform.googleapis.com \
   --project=$PROJECT_ID
 
 # Create GCS Bucket if it doesn't exist
@@ -53,10 +52,10 @@ else
 fi
 echo ""
 
-# Securely get the Gemini API key
-read -sp "🔑 Please enter your Gemini API Key: " GEMINI_API_KEY
+# Securely get the Anthropic API key
+read -sp "🔑 Please enter your Anthropic API Key: " ANTHROPIC_API_KEY
 echo ""
-if [ -z "$GEMINI_API_KEY" ]; then
+if [ -z "$ANTHROPIC_API_KEY" ]; then
     echo "❌ API Key cannot be empty. Aborting."
     exit 1
 fi
@@ -75,7 +74,7 @@ gcloud run deploy $SERVICE_NAME \
   --allow-unauthenticated \
   --project=$PROJECT_ID \
   --set-env-vars="STORAGE_BUCKET=$BUCKET_NAME" \
-  --set-env-vars="GEMINI_API_KEY=$GEMINI_API_KEY" \
+  --set-env-vars="ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY" \
   --cpu=2 \
   --memory=2Gi \
   --timeout=900 # 15 minutes, as scraping can be long
@@ -90,5 +89,5 @@ echo "To run the pipeline, send a POST request:"
 echo "curl -X POST -H \"Content-Type: application/json\" -d '{\"start_date\": \"YYYY-MM-DD\"}' $SERVICE_URL/shfe/run"
 echo ""
 echo "Example:"
-echo "curl -X POST -H \"Content-Type: application/json\" -d '{\"start_date\": \"2025-01-10\"}' $SERVICE_URL/shfe/run"
+echo "curl -X POST -H \"Content-Type: application/json\" -d '{\"start_date\": \"2024-01-01\"}' $SERVICE_URL/shfe/run"
 echo "================================================="
