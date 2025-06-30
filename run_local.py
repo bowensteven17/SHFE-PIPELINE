@@ -38,7 +38,7 @@ def main():
     
     # Start from 5 years ago to ensure a wide search window
     # start_date = (datetime.now() - timedelta(days=1825)).strftime('%Y-%m-%d')
-    start_date = '2025-04-01'
+    start_date = '2025-01-01'  # Expanded to capture more margin adjustments
     print(f"📅 Using start date for scraping: {start_date}")
     print(f"💡 Tip: Margin adjustment notices are typically found during:")
     print(f"   • Holiday periods (Spring Festival, National Day)")

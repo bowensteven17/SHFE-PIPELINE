@@ -19,7 +19,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+from selenium.common.exceptions import TimeoutException, InvalidSessionIdException, NoSuchElementException
 from datetime import timedelta
 
 # Claude integration
@@ -65,19 +65,67 @@ class SHFEDataExporter:
         workbook = xlwt.Workbook(encoding='utf-8')
         worksheet = workbook.add_sheet('Data')
         
+        # Commodity name mapping to match example format
+        commodity_mapping = {
+            'COPPER': 'COPPER',
+            'ALUMINUM': 'ALUMINIUM',
+            'ZINC': 'ZINC',
+            'LEAD': 'LEAD',
+            'NICKEL': 'NICKEL',
+            'TIN': 'TIN',
+            'ALUMINA': 'ALUMINA',
+            'GOLD': 'GOLD',
+            'SILVER': 'SILVER',
+            'REBAR': 'REBAR',
+            'HOT_ROLLED_COIL': 'HOTROLLCOIL',
+            'HOT-ROLLED_COIL': 'HOTROLLCOIL',
+            'STAINLESS_STEEL': 'STAINLESSSTEEL',
+            'NATURAL_RUBBER': 'NATURRUBBER',
+            'FUEL_OIL': 'FUELOIL',
+            'PETROLEUM_ASPHALT': 'PETASPHALT',
+            'WIRE_ROD': 'WIREROD',
+            'BUTADIENE_RUBBER': 'BUTRUBBER',
+            'PULP': 'PULP'
+        }
+        
+        # Description mapping for commodities
+        commodity_descriptions = {
+            'COPPER': 'Copper',
+            'ALUMINIUM': 'Aluminium',
+            'ZINC': 'Zinc',
+            'LEAD': 'Lead',
+            'NICKEL': 'Nickel',
+            'TIN': 'Tin',
+            'ALUMINA': 'Alumina',
+            'GOLD': 'Gold',
+            'SILVER': 'Silver',
+            'REBAR': 'Rebar',
+            'HOTROLLCOIL': 'Hot-rolled Coil',
+            'STAINLESSSTEEL': 'Stainless Steel',
+            'NATURRUBBER': 'Natural Rubber',
+            'FUELOIL': 'Fuel Oil',
+            'PETASPHALT': 'Petroleum Asphalt ',
+            'WIREROD': 'Wire Rod',
+            'BUTRUBBER': 'Butadiene Rubber',
+            'PULP': 'Pulp'
+        }
+        
         # Group data by effective date
         data_by_date = {}
         time_series_codes = set()
         
         for entry in data_entries:
             effective_date = entry['effective_date']
-            commodity = entry['commodity'].upper().replace(' ', '_').replace('-', '_')
+            commodity_raw = entry['commodity'].upper().replace(' ', '_').replace('-', '_')
+            
+            # Map commodity name to expected format
+            commodity = commodity_mapping.get(commodity_raw, commodity_raw)
             
             if effective_date not in data_by_date:
                 data_by_date[effective_date] = {}
             
-            hedging_code = f"{commodity}_HEDGING_MARGIN"
-            speculative_code = f"{commodity}_SPECULATIVE_MARGIN"
+            hedging_code = f"SHFEMR.{commodity}.HEDGERS.B"
+            speculative_code = f"SHFEMR.{commodity}.SPECULATORS.B"
             
             data_by_date[effective_date][hedging_code] = entry['hedging_percentage']
             data_by_date[effective_date][speculative_code] = entry['speculative_percentage']
@@ -85,14 +133,35 @@ class SHFEDataExporter:
             time_series_codes.add(hedging_code)
             time_series_codes.add(speculative_code)
         
-        # Write headers
-        sorted_codes = sorted(time_series_codes)
-        worksheet.write(0, 0, "DATE")
-        worksheet.write(1, 0, "Reporting Date")
+        # Define exact column order to match example file
+        column_order = [
+            'COPPER', 'ALUMINA', 'LEAD', 'ZINC', 'ALUMINIUM', 'GOLD', 'NICKEL', 'REBAR', 
+            'PULP', 'NATURRUBBER', 'SILVER', 'FUELOIL', 'PETASPHALT', 'WIREROD', 'TIN', 
+            'BUTRUBBER', 'HOTROLLCOIL', 'STAINLESSSTEEL'
+        ]
         
-        for col_idx, code in enumerate(sorted_codes, 1):
+        # Create ordered list of codes
+        ordered_codes = []
+        for commodity in column_order:
+            hedging_code = f"SHFEMR.{commodity}.HEDGERS.B"
+            speculative_code = f"SHFEMR.{commodity}.SPECULATORS.B"
+            # Only add codes that exist in our data
+            if hedging_code in time_series_codes:
+                ordered_codes.append(hedging_code)
+            if speculative_code in time_series_codes:
+                ordered_codes.append(speculative_code)
+        
+        # Write headers - first row is empty, second row has column headers
+        worksheet.write(0, 0, "")
+        worksheet.write(1, 0, "")
+        
+        for col_idx, code in enumerate(ordered_codes, 1):
             worksheet.write(0, col_idx, code)
-            description = code.replace('_', ' ').title()
+            # Extract commodity name from code for description
+            commodity_code = code.split('.')[1]
+            commodity_desc = commodity_descriptions.get(commodity_code, commodity_code.replace('_', ' ').title())
+            transaction_type = "hedging" if "HEDGERS" in code else "speculative"
+            description = f"{commodity_desc}: Margin ratio for {transaction_type} transactions"
             worksheet.write(1, col_idx, description)
         
         # Write data
@@ -100,7 +169,7 @@ class SHFEDataExporter:
         for row_idx, effective_date in enumerate(sorted_dates, 2):
             worksheet.write(row_idx, 0, effective_date)
             
-            for col_idx, code in enumerate(sorted_codes, 1):
+            for col_idx, code in enumerate(ordered_codes, 1):
                 value = data_by_date[effective_date].get(code, "")
                 worksheet.write(row_idx, col_idx, value)
         
@@ -120,16 +189,58 @@ class SHFEDataExporter:
         for col_idx, header in enumerate(headers):
             worksheet.write(0, col_idx, header)
         
-        # Sample metadata for common commodities
-        commodities = ['COPPER', 'ALUMINUM', 'ZINC', 'LEAD', 'NICKEL', 'TIN', 
-                      'ALUMINA', 'GOLD', 'SILVER', 'REBAR']
-        transaction_types = ['HEDGING', 'SPECULATIVE']
+        # Sample metadata for common commodities (using same mapping as DATA file)
+        commodity_mapping = {
+            'COPPER': 'COPPER',
+            'ALUMINUM': 'ALUMINIUM',
+            'ZINC': 'ZINC',
+            'LEAD': 'LEAD',
+            'NICKEL': 'NICKEL',
+            'TIN': 'TIN',
+            'ALUMINA': 'ALUMINA',
+            'GOLD': 'GOLD',
+            'SILVER': 'SILVER',
+            'REBAR': 'REBAR',
+            'HOT_ROLLED_COIL': 'HOTROLLCOIL',
+            'STAINLESS_STEEL': 'STAINLESSSTEEL',
+            'NATURAL_RUBBER': 'NATURRUBBER',
+            'FUEL_OIL': 'FUELOIL',
+            'PETROLEUM_ASPHALT': 'PETASPHALT',
+            'WIRE_ROD': 'WIREROD',
+            'BUTADIENE_RUBBER': 'BUTRUBBER',
+            'PULP': 'PULP'
+        }
+        
+        commodity_descriptions = {
+            'COPPER': 'Copper',
+            'ALUMINIUM': 'Aluminium',
+            'ZINC': 'Zinc',
+            'LEAD': 'Lead',
+            'NICKEL': 'Nickel',
+            'TIN': 'Tin',
+            'ALUMINA': 'Alumina',
+            'GOLD': 'Gold',
+            'SILVER': 'Silver',
+            'REBAR': 'Rebar',
+            'HOTROLLCOIL': 'Hot-rolled Coil',
+            'STAINLESSSTEEL': 'Stainless Steel',
+            'NATURRUBBER': 'Natural Rubber',
+            'FUELOIL': 'Fuel Oil',
+            'PETASPHALT': 'Petroleum Asphalt',
+            'WIREROD': 'Wire Rod',
+            'BUTRUBBER': 'Butadiene Rubber',
+            'PULP': 'Pulp'
+        }
+        
+        commodities = list(commodity_mapping.values())
+        transaction_types = [('HEDGERS', 'hedging'), ('SPECULATORS', 'speculative')]
         
         row_idx = 1
         for commodity in commodities:
-            for transaction_type in transaction_types:
-                timeseries_id = f"{commodity}_{transaction_type}_MARGIN"
-                description = f"{commodity.replace('_', ' ').title()} {transaction_type.title()} Margin Ratio"
+            for transaction_type, transaction_desc in transaction_types:
+                timeseries_id = f"SHFEMR.{commodity}.{transaction_type}.B"
+                commodity_desc = commodity_descriptions.get(commodity, commodity.replace('_', ' ').title())
+                description = f"{commodity_desc}: Margin ratio for {transaction_desc} transactions"
                 
                 worksheet.write(row_idx, 0, timeseries_id)
                 worksheet.write(row_idx, 1, description)
@@ -446,6 +557,46 @@ class LLMEnhancedSHFEScraper:
         except Exception as e:
             print(f"❌ Failed to initialize Chrome driver: {e}")
             raise
+    
+    def is_driver_valid(self) -> bool:
+        """Check if the WebDriver session is still valid"""
+        try:
+            # Simple operation to test driver validity
+            self.driver.current_url
+            return True
+        except Exception:
+            return False
+    
+    def restart_driver_if_needed(self, reload_page: bool = True) -> bool:
+        """Restart the driver if the session is invalid. Returns True if restart was successful."""
+        if not hasattr(self, 'driver') or not self.driver or not self.is_driver_valid():
+            print("🔄 Driver session invalid, attempting to restart...")
+            try:
+                # Clean up existing driver
+                if hasattr(self, 'driver') and self.driver:
+                    try:
+                        self.driver.quit()
+                    except:
+                        pass
+                
+                # Reinitialize driver
+                self.setup_driver()
+                
+                # Reload the main page if requested
+                if reload_page and hasattr(self, 'base_url'):
+                    try:
+                        print("🔄 Reloading main page after driver restart...")
+                        self.driver.get(self.base_url)
+                        time.sleep(3)  # Give time for page to load
+                    except Exception as e:
+                        print(f"⚠️ Failed to reload main page: {e}")
+                
+                print("✅ Driver restarted successfully")
+                return True
+            except Exception as e:
+                print(f"❌ Failed to restart driver: {e}")
+                return False
+        return True
         
     def setup_csv(self):
         """Initialize CSV file"""
@@ -465,7 +616,8 @@ class LLMEnhancedSHFEScraper:
         strong_indicators = [
             "保证金比例", "交易保证金", "margin ratio", "price limit",
             "端午节", "劳动节", "春节", "国庆节", "中秋节",  # Holiday adjustments
-            "Dragon Boat", "Labor Day", "Spring Festival", "National Day"
+            "Dragon Boat", "Labor Day", "Spring Festival", "National Day",
+            "调整交易保证金", "铸造铝合金", "阴极铜", "氧化铝"  # Added specific indicators
         ]
         weak_indicators = [
             "保证金", "限额", "调整", "margin", "ratio", "limit",
@@ -473,13 +625,13 @@ class LLMEnhancedSHFEScraper:
         ]
         title_lower = title.lower()
         if any(indicator in title_lower or indicator in title for indicator in strong_indicators):
-            print(f"🎯 Strong margin indicator found in title")
+            print(f"🎯 Strong margin indicator found in title: {title}")
             return True
         weak_matches = sum(1 for indicator in weak_indicators if indicator in title_lower or indicator in title)
         if weak_matches >= 2:
-            print(f"🎯 Multiple weak indicators ({weak_matches}) found in title")
+            print(f"🎯 Multiple weak indicators ({weak_matches}) found in title: {title}")
             return True
-        print(f"⏭️ No sufficient margin indicators in title")
+        print(f"⏭️ No sufficient margin indicators in title: {title}")
         return False
     
     def extract_clean_text(self, page_source: str) -> str:
@@ -492,7 +644,18 @@ class LLMEnhancedSHFEScraper:
     
     def scrape_notice_content(self, notice_url: str, title: str, notice_date: date) -> int:
         """Enhanced notice scraping with Claude parsing and better error handling"""
-        current_window = self.driver.current_window_handle
+        # Check driver session and restart if needed
+        if not self.restart_driver_if_needed():
+            print("❌ Could not restart driver session")
+            return 0
+        
+        try:
+            current_window = self.driver.current_window_handle
+        except InvalidSessionIdException:
+            print("🔄 Session lost getting current window, restarting driver...")
+            if not self.restart_driver_if_needed():
+                return 0
+            current_window = self.driver.current_window_handle
         
         try:
             self.driver.execute_script(f"window.open('{notice_url}', '_blank');")
@@ -523,9 +686,10 @@ class LLMEnhancedSHFEScraper:
                 print("⚠️ Claude parser not available")
                 return 0
             
-            if not self.quick_margin_check(clean_text):
-                print("⚡ Quick filter: Not a margin notice (skipping Claude)")
-                return 0
+            # Quick filter disabled - process all reports with Claude
+            # if not self.quick_margin_check(clean_text):
+            #     print("⚡ Quick filter: Not a margin notice (skipping Claude)")
+            #     return 0
             
             print("🤖 Parsing content with Claude Enhanced Logic...")
             try:
@@ -591,14 +755,15 @@ class LLMEnhancedSHFEScraper:
             except Exception as e:
                 print(f"⚠️ Error closing tab: {e}")
     
-    def quick_margin_check(self, content: str) -> bool:
-        margin_indicators = ['margin ratio', 'trading margin', '保证金', '交易保证金', 'hedging', 'speculative', '套期保值', '投机', 'price limit', '价格限额', 'adjusted to', '调整']
-        content_lower = content.lower()
-        matches = sum(1 for indicator in margin_indicators if indicator in content_lower)
-        is_likely = matches >= 3
-        if not is_likely:
-            print(f"⚡ Quick filter: Only {matches}/3+ margin indicators found")
-        return is_likely
+    # DISABLED: Quick margin check - now processing all reports with Claude
+    # def quick_margin_check(self, content: str) -> bool:
+    #     margin_indicators = ['margin ratio', 'trading margin', '保证金', '交易保证金', 'hedging', 'speculative', '套期保值', '投机', 'price limit', '价格限额', 'adjusted to', '调整']
+    #     content_lower = content.lower()
+    #     matches = sum(1 for indicator in margin_indicators if indicator in content_lower)
+    #     is_likely = matches >= 3
+    #     if not is_likely:
+    #         print(f"⚡ Quick filter: Only {matches}/3+ margin indicators found")
+    #     return is_likely
     
     def append_to_csv(self, data: Dict):
         with open(self.csv_output, 'a', newline='', encoding='utf-8') as file:
@@ -634,7 +799,7 @@ class LLMEnhancedSHFEScraper:
     def process_notices_on_page_safe(self, page_num: int) -> Tuple[int, int, int]:
         processed_count = 0
         extracted_count = 0
-        claude_calls_saved = 0
+        claude_calls_saved = 0  # No longer used - processing all reports
         
         try:
             try:
@@ -663,6 +828,12 @@ class LLMEnhancedSHFEScraper:
                         date_element = item.find_element(By.CSS_SELECTOR, ".info_item_date")
                         date_text = date_element.text.strip()
                         notice_date = self.parse_date(date_text)
+                    except InvalidSessionIdException:
+                        print(f"🔄 Session lost extracting date from notice {idx + 1}, restarting driver...")
+                        if not self.restart_driver_if_needed():
+                            return processed_count, extracted_count, claude_calls_saved
+                        # Need to reload the page and re-find items
+                        return processed_count, extracted_count, claude_calls_saved
                     except Exception as e:
                         print(f"⚠️ Could not extract date from notice {idx + 1}: {e}")
                         continue
@@ -678,6 +849,7 @@ class LLMEnhancedSHFEScraper:
                         print(f"⚠️ Could not extract title/URL from notice {idx + 1}: {e}")
                         continue
                     
+                    # Re-enabled title filtering to reduce Claude API calls
                     if not self.is_likely_margin_notice(title):
                         claude_calls_saved += 1
                         continue
@@ -702,6 +874,7 @@ class LLMEnhancedSHFEScraper:
                     print(f"❌ Error processing notice {idx + 1}: {e}")
                     continue
             
+            # Report Claude API calls saved
             if claude_calls_saved > 0:
                 print(f"⚡ Saved {claude_calls_saved} Claude calls via title filtering")
         except Exception as e:
@@ -722,6 +895,10 @@ class LLMEnhancedSHFEScraper:
     
     def navigate_to_next_page(self) -> bool:
         try:
+            # Check driver session first
+            if not self.restart_driver_if_needed():
+                return False
+            
             next_selectors = [".btn-next:not([disabled])", ".el-pagination__next:not(.is-disabled)", ".pagination-next:not(.disabled)"]
             next_button = None
             for selector in next_selectors:
@@ -743,6 +920,11 @@ class LLMEnhancedSHFEScraper:
             except TimeoutException:
                 print("⏰ Timeout after clicking next page")
                 return False
+        except InvalidSessionIdException:
+            print("🔄 Session lost during navigation, restarting driver...")
+            if self.restart_driver_if_needed():
+                return False  # Need to restart processing from beginning
+            return False
         except Exception as e:
             print(f"❌ Error navigating to next page: {e}")
             return False
@@ -787,10 +969,15 @@ class LLMEnhancedSHFEScraper:
                 total_processed += processed
                 total_extracted += extracted
                 
-                if processed == 0: pages_without_data += 1
-                else: pages_without_data = 0
+                if processed == 0: 
+                    pages_without_data += 1
+                    print(f"📄 No margin notices found on page {page_count} ({pages_without_data} consecutive empty pages)")
+                else: 
+                    pages_without_data = 0
+                    print(f"📄 Found {processed} margin notices on page {page_count}")
                 
-                if pages_without_data > 2 or page_count > 10:
+                if pages_without_data > 5 or page_count > 25:
+                    print(f"🛑 Stopping: {pages_without_data} empty pages or reached {page_count} pages")
                     break
                 
                 if not self.navigate_to_next_page():
