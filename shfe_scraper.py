@@ -435,6 +435,11 @@ CRITICAL REQUIREMENTS:
                     for commodity in commodities:
                         hedging = commodity.get('hedging_percentage', 0)
                         speculative = commodity.get('speculative_percentage', 0)
+                        # Handle None values from Claude parsing
+                        if hedging is None:
+                            hedging = 0
+                        if speculative is None:
+                            speculative = 0
                         if hedging > 20 or speculative > 20:
                             invalid_percentages.append(f"{commodity.get('commodity')}({hedging}%/{speculative}%)")
                     
@@ -617,7 +622,8 @@ class LLMEnhancedSHFEScraper:
             "保证金比例", "交易保证金", "margin ratio", "price limit",
             "端午节", "劳动节", "春节", "国庆节", "中秋节",  # Holiday adjustments
             "Dragon Boat", "Labor Day", "Spring Festival", "National Day",
-            "调整交易保证金", "铸造铝合金", "阴极铜", "氧化铝"  # Added specific indicators
+            "调整交易保证金", "铸造铝合金", "阴极铜", "氧化铝",  # Added specific indicators
+            "工作安排", "节假日", "holiday"  # Work arrangements and holiday keywords
         ]
         weak_indicators = [
             "保证金", "限额", "调整", "margin", "ratio", "limit",
@@ -709,6 +715,12 @@ class LLMEnhancedSHFEScraper:
                 for commodity_data in date_entry['commodities']:
                     hedging_pct = commodity_data.get('hedging_percentage', 0)
                     speculative_pct = commodity_data.get('speculative_percentage', 0)
+                    
+                    # Handle None values from Claude parsing
+                    if hedging_pct is None:
+                        hedging_pct = 0
+                    if speculative_pct is None:
+                        speculative_pct = 0
                     
                     if hedging_pct > 20 or speculative_pct > 20:
                         print(f"⚠️ Skipping {commodity_data['commodity']}: percentages exceed 20% limit")
@@ -849,10 +861,11 @@ class LLMEnhancedSHFEScraper:
                         print(f"⚠️ Could not extract title/URL from notice {idx + 1}: {e}")
                         continue
                     
-                    # Re-enabled title filtering to reduce Claude API calls
-                    if not self.is_likely_margin_notice(title):
-                        claude_calls_saved += 1
-                        continue
+                    # DISABLED: Title filtering - processing all notices to avoid missing data
+                    # Many margin notices have generic titles but contain margin data in content
+                    # if not self.is_likely_margin_notice(title):
+                    #     claude_calls_saved += 1
+                    #     continue
                     
                     if relative_url.startswith("./"):
                         full_url = self.base_url + relative_url[2:]
@@ -874,9 +887,9 @@ class LLMEnhancedSHFEScraper:
                     print(f"❌ Error processing notice {idx + 1}: {e}")
                     continue
             
-            # Report Claude API calls saved
-            if claude_calls_saved > 0:
-                print(f"⚡ Saved {claude_calls_saved} Claude calls via title filtering")
+            # Title filtering disabled - processing all notices
+            # if claude_calls_saved > 0:
+            #     print(f"⚡ Saved {claude_calls_saved} Claude calls via title filtering")
         except Exception as e:
             print(f"❌ Critical error on page {page_num}: {e}")
             
@@ -976,7 +989,7 @@ class LLMEnhancedSHFEScraper:
                     pages_without_data = 0
                     print(f"📄 Found {processed} margin notices on page {page_count}")
                 
-                if pages_without_data > 5 or page_count > 25:
+                if pages_without_data > 10 or page_count > 50:
                     print(f"🛑 Stopping: {pages_without_data} empty pages or reached {page_count} pages")
                     break
                 
