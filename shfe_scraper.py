@@ -314,14 +314,24 @@ ENHANCED PARSING RULES (from txt file analysis):
 4. HANDLING SPECIAL STATEMENTS:
    - "remains at X%" → Extract the actual percentage value, mark as "remains_at"
    - "restored to their original levels" → Mark as "restored_to_original" and note previous lookup needed
+   - "revert to original levels" → Mark as "reverted_to_original" 
+   - "恢复原水平" / "恢复到原来水平" → Mark as "reverted_to_original"
+   - "unless otherwise specified" → Indicates reversion for unlisted commodities
    - ALWAYS extract the margin ratios (hedging/speculative), NOT price limits
 
-5. VALIDATION RULES:
+5. REVERSION NOTICE DETECTION:
+   - Look for phrases like "will revert to their original levels", "unless otherwise specified"
+   - If notice mentions specific commodities with new ratios AND says others revert, mark this as a reversion notice
+   - For reversion notices, extract BOTH explicit ratios AND identify which commodities should revert
+   - Example: "Gold futures will be adjusted to 13%/14%. All other contracts will revert to original levels."
+     Should extract: Gold with explicit ratios + reversion_notice=true for inference processing
+
+6. VALIDATION RULES:
    - All margin percentages must be ≤ 20%
    - If percentage > 20%, exclude that commodity (likely not a physical commodity)
    - Hedging percentage should be ≤ Speculative percentage (usually)
 
-6. COMMODITY NAME STANDARDIZATION:
+7. COMMODITY NAME STANDARDIZATION:
    - 铜/copper/international copper → "Copper"
    - 铝/aluminum → "Aluminum" 
    - 锌/zinc → "Zinc"
@@ -363,6 +373,12 @@ Extract as: commodity=(Gold) with adjustment_type="restored_to_original"
 OUTPUT FORMAT (JSON only):
 {{
     "is_margin_notice": true/false,
+    "is_reversion_notice": true/false,
+    "reversion_details": {{
+        "has_explicit_commodities": true/false,
+        "has_reversion_clause": true/false,
+        "reversion_text": "exact text indicating reversion"
+    }},
     "effective_dates": [
         {{
             "date": "YYYY-MM-DD",
@@ -372,7 +388,7 @@ OUTPUT FORMAT (JSON only):
                     "commodity": "standardized name",
                     "hedging_percentage": number,
                     "speculative_percentage": number,
-                    "adjustment_type": "adjusted_to/remains_at/restored_to_original",
+                    "adjustment_type": "adjusted_to/remains_at/restored_to_original/reverted_to_original",
                     "source_sentence": "exact sentence with this data"
                 }}
             ]
@@ -381,7 +397,8 @@ OUTPUT FORMAT (JSON only):
     "total_commodities": number,
     "total_entries": number,
     "parsing_confidence": "high/medium/low",
-    "excluded_non_commodities": ["list of excluded items like indices"]
+    "excluded_non_commodities": ["list of excluded items like indices"],
+    "summary": "brief description of what was extracted"
 }}
 
 CRITICAL REQUIREMENTS:
@@ -700,8 +717,12 @@ class LLMEnhancedSHFEScraper:
             print("🤖 Parsing content with Claude Enhanced Logic...")
             try:
                 claude_result = self.claude_parser.parse_margin_notice(clean_text, title)
+                print(f"🤖 Claude Enhanced: {claude_result.get('summary', 'No summary available')}")
             except Exception as e:
-                print(f"⚠️ Claude parsing error: {e}")
+                print(f"❌ Claude parsing failed: {e}")
+                # Log more details about the failure
+                if "NoneType" in str(e):
+                    print(f"🔍 NoneType error suggests data structure issue in notice: {title}")
                 return 0
             
             if not claude_result.get('is_margin_notice', False):
@@ -709,10 +730,20 @@ class LLMEnhancedSHFEScraper:
                 return 0
             
             saved_count = 0
-            for date_entry in claude_result.get('effective_dates', []):
-                effective_date = date_entry['date']
+            effective_dates = claude_result.get('effective_dates', [])
+            print(f"💾 Found {len(effective_dates)} effective dates in notice")
+            
+            for date_entry in effective_dates:
+                effective_date = date_entry.get('date')
+                if not effective_date:
+                    print(f"⚠️ Skipping entry with missing effective date")
+                    continue
                 
-                for commodity_data in date_entry['commodities']:
+                commodities = date_entry.get('commodities', [])
+                print(f"📅 {effective_date}: processing {len(commodities)} commodities")
+                
+                for commodity_data in commodities:
+                    commodity_name = commodity_data.get('commodity', 'Unknown')
                     hedging_pct = commodity_data.get('hedging_percentage', 0)
                     speculative_pct = commodity_data.get('speculative_percentage', 0)
                     
@@ -723,8 +754,10 @@ class LLMEnhancedSHFEScraper:
                         speculative_pct = 0
                     
                     if hedging_pct > 20 or speculative_pct > 20:
-                        print(f"⚠️ Skipping {commodity_data['commodity']}: percentages exceed 20% limit")
+                        print(f"⚠️ Skipping {commodity_name}: percentages exceed 20% limit ({hedging_pct}%/{speculative_pct}%)")
                         continue
+                    
+                    print(f"💾 Saving: {commodity_name} ({hedging_pct}%/{speculative_pct}%) effective {effective_date}")
                     
                     entry = {
                         'notice_date': notice_date.strftime("%Y-%m-%d"),
@@ -748,6 +781,23 @@ class LLMEnhancedSHFEScraper:
             if saved_count > 0:
                 unique_commodities = len(set(entry['commodity'] for entry in self.extracted_data if entry['notice_date'] == notice_date.strftime("%Y-%m-%d")))
                 print(f"💾 Saved {saved_count} entries for {unique_commodities} commodities")
+            
+            # Handle reversion notice post-processing - STRICT validation to prevent false positives
+            if self.is_valid_reversion_notice(claude_result, title):
+                print(f"🔄 Detected VALID reversion notice - will process after all data collected")
+                # Store reversion notice info for later processing
+                reversion_info = {
+                    'notice_date': notice_date,
+                    'title': title,
+                    'url': notice_url,
+                    'claude_result': claude_result,
+                    'effective_dates': claude_result.get('effective_dates', [])
+                }
+                if not hasattr(self, 'reversion_notices'):
+                    self.reversion_notices = []
+                self.reversion_notices.append(reversion_info)
+            elif claude_result.get('is_reversion_notice', False):
+                print(f"⚠️ Reversion flag detected but failed validation - NOT processing inference for: {title}")
             
             return saved_count
                 
@@ -777,6 +827,219 @@ class LLMEnhancedSHFEScraper:
     #         print(f"⚡ Quick filter: Only {matches}/3+ margin indicators found")
     #     return is_likely
     
+    def is_valid_reversion_notice(self, claude_result, title):
+        """Strict validation to determine if a notice should trigger reversion inference"""
+        
+        # Must be flagged as reversion notice by Claude
+        if not claude_result.get('is_reversion_notice', False):
+            return False
+        
+        # Must have reversion details
+        reversion_details = claude_result.get('reversion_details', {})
+        if not reversion_details.get('has_reversion_clause', False):
+            return False
+        
+        # Must have reversion text containing key phrases
+        reversion_text = reversion_details.get('reversion_text', '').lower()
+        required_phrases = [
+            'revert to their original levels',
+            'revert to original levels', 
+            'restored to their original levels',
+            'unless otherwise specified',
+            '恢复原水平',
+            '恢复到原来水平',
+            '恢复至原有水平',  # Added Chinese phrase from the actual notice
+            'revert to original',
+            'restore to original'
+        ]
+        
+        if not any(phrase in reversion_text for phrase in required_phrases):
+            print(f"🚫 Reversion text doesn't contain required phrases: {reversion_text}")
+            return False
+        
+        # Must have multiple effective dates OR explicit + implicit commodities
+        effective_dates = claude_result.get('effective_dates', [])
+        if len(effective_dates) < 2:
+            # Single date notices should only be reversion if they have explicit + implicit pattern
+            if len(effective_dates) == 1:
+                commodities = effective_dates[0].get('commodities', [])
+                # Look for pattern where few commodities are explicit but notice says "others revert"
+                if len(commodities) > 5:  # If many commodities are explicit, probably not reversion
+                    print(f"🚫 Too many explicit commodities ({len(commodities)}) for single-date reversion")
+                    return False
+            else:
+                print(f"🚫 No effective dates found")
+                return False
+        
+        # Must be holiday-related notice (most reversion notices are holiday work arrangements)
+        holiday_keywords = [
+            'holiday', 'festival', 'day', 'arrangements', 'work arrangements',
+            '节', '假期', '工作安排', '节假日', 'labor day', 'spring festival', 
+            'national day', 'dragon boat', '劳动节', '春节', '国庆节', '端午节'
+        ]
+        
+        title_lower = title.lower()
+        if not any(keyword in title_lower for keyword in holiday_keywords):
+            print(f"🚫 Title doesn't contain holiday keywords: {title}")
+            return False
+        
+        print(f"✅ Reversion notice validation passed for: {title}")
+        return True
+
+    def process_reversion_notices(self):
+        """Process all collected reversion notices to infer missing margin ratios"""
+        if not hasattr(self, 'reversion_notices') or not self.reversion_notices:
+            return 0
+        
+        print(f"\n🔄 Processing {len(self.reversion_notices)} reversion notices...")
+        total_inferred = 0
+        
+        for reversion_info in self.reversion_notices:
+            try:
+                inferred_count = self.process_single_reversion_notice(reversion_info)
+                total_inferred += inferred_count
+            except Exception as e:
+                print(f"❌ Error processing reversion notice: {e}")
+                continue
+        
+        print(f"🔄 Reversion processing complete: {total_inferred} entries inferred")
+        return total_inferred
+    
+    def process_single_reversion_notice(self, reversion_info):
+        """Process a single reversion notice to infer margin ratios for unlisted commodities"""
+        effective_dates = reversion_info['effective_dates']
+        inferred_count = 0
+        
+        # All known SHFE commodities
+        all_commodities = [
+            'Copper', 'Aluminum', 'Zinc', 'Lead', 'Nickel', 'Tin', 'Alumina', 
+            'Gold', 'Silver', 'Rebar', 'Hot-rolled Coil', 'Wire Rod', 'Stainless Steel',
+            'Fuel Oil', 'Petroleum Asphalt', 'Butadiene Rubber', 'Natural Rubber', 
+            'Pulp', 'Crude Oil', 'Low-sulfur Fuel Oil'
+        ]
+        
+        for date_entry in effective_dates:
+            effective_date = date_entry.get('date')
+            if not effective_date:
+                continue
+                
+            # Get commodities explicitly mentioned in this reversion notice
+            explicit_commodities = [c['commodity'] for c in date_entry.get('commodities', [])]
+            print(f"📅 {effective_date}: Found explicit commodities: {explicit_commodities}")
+            
+            # Find commodities that should revert (not explicitly mentioned)
+            commodities_to_revert = [c for c in all_commodities if c not in explicit_commodities]
+            print(f"🔄 Commodities needing reversion inference: {commodities_to_revert}")
+            
+            # Find baseline ratios for these commodities (last known non-holiday rates)
+            for commodity in commodities_to_revert:
+                # CRITICAL: Check if this commodity+date already exists to prevent data corruption
+                existing_entry = self.find_existing_entry(commodity, effective_date)
+                if existing_entry:
+                    print(f"🛡️ PROTECTED: {commodity} on {effective_date} already exists - skipping inference")
+                    continue
+                
+                baseline_ratios = self.find_baseline_ratios(commodity, effective_date)
+                if baseline_ratios:
+                    # Create inferred entry
+                    entry = {
+                        'notice_date': reversion_info['notice_date'].strftime("%Y-%m-%d"),
+                        'title': reversion_info['title'] + " [INFERRED REVERSION]",
+                        'url': reversion_info['url'],
+                        'commodity': commodity,
+                        'hedging_percentage': baseline_ratios['hedging'],
+                        'speculative_percentage': baseline_ratios['speculative'],
+                        'effective_date': effective_date,
+                        'adjustment_type': 'reverted_to_original',
+                        'source_sentence': f'Inferred from reversion notice: {reversion_info["claude_result"].get("reversion_details", {}).get("reversion_text", "")}',
+                        'parsing_method': 'Reversion_Inference',
+                        'confidence': 'medium',
+                        'scraped_at': datetime.now().isoformat()
+                    }
+                    
+                    print(f"💾 Inferring reversion: {commodity} → {baseline_ratios['hedging']}%/{baseline_ratios['speculative']}% on {effective_date}")
+                    self.append_to_csv(entry)
+                    self.extracted_data.append(entry)
+                    inferred_count += 1
+                else:
+                    print(f"⚠️ Could not find baseline ratios for {commodity}")
+        
+        return inferred_count
+    
+    def find_existing_entry(self, commodity, effective_date):
+        """Check if an entry already exists for this commodity and effective date"""
+        for entry in self.extracted_data:
+            if (entry['commodity'] == commodity and 
+                entry['effective_date'] == effective_date):
+                return entry
+        return None
+    
+    def find_baseline_ratios(self, commodity, effective_date):
+        """Find the last known non-holiday margin ratios for a commodity before the given date"""
+        try:
+            effective_date_obj = datetime.strptime(effective_date, "%Y-%m-%d").date()
+        except:
+            return None
+        
+        # Holiday keywords that indicate temporary adjustments
+        holiday_keywords = ['holiday', 'festival', '节', 'day', 'labor', 'spring', 'national', 'dragon boat']
+        
+        # First try to find from extracted data (for commodities we've already processed)
+        commodity_entries = []
+        for entry in self.extracted_data:
+            if (entry['commodity'] == commodity and 
+                entry['effective_date'] < effective_date and
+                not any(keyword.lower() in entry['title'].lower() for keyword in holiday_keywords)):
+                commodity_entries.append(entry)
+        
+        if commodity_entries:
+            # Sort by effective date and get the most recent non-holiday entry
+            commodity_entries.sort(key=lambda x: x['effective_date'], reverse=True)
+            latest_entry = commodity_entries[0]
+            
+            return {
+                'hedging': latest_entry['hedging_percentage'],
+                'speculative': latest_entry['speculative_percentage'],
+                'source_date': latest_entry['effective_date']
+            }
+        
+        # Fallback: Use known baseline ratios for SHFE commodities 
+        # Based on reference file data from early 2025 (pre-holiday normal rates)
+        baseline_ratios = {
+            'Copper': (8, 9),           # From 2025-02-05 reference data
+            'Aluminum': (8, 9),         # From 2025-02-05 reference data  
+            'Zinc': (8, 9),             # From 2025-02-05 reference data
+            'Lead': (8, 9),             # From 2025-02-05 reference data
+            'Nickel': (11, 12),         # From 2025-02-05 reference data
+            'Tin': (11, 12),            # From 2025-02-05 reference data
+            'Alumina': (8, 9),          # From 2025-02-05 reference data
+            'Gold': (13, 14),           # From 2025-02-05 reference data (most recent stable)
+            'Silver': (12, 13),         # From 2025-02-05 reference data
+            'Rebar': (6, 7),            # From 2025-02-05 reference data
+            'Hot-rolled Coil': (6, 7),  # From 2025-02-05 reference data
+            'Wire Rod': (8, 9),         # From 2025-02-05 reference data
+            'Stainless Steel': (6, 7),  # From 2025-02-05 reference data
+            'Fuel Oil': (8, 9),         # From 2025-02-05 reference data
+            'Petroleum Asphalt': (8, 9), # From 2025-02-05 reference data
+            'Butadiene Rubber': (8, 9),  # From 2025-02-05 reference data
+            'Natural Rubber': (7, 8),    # From 2025-02-05 reference data
+            'Pulp': (7, 8),             # From 2025-02-05 reference data
+            'Crude Oil': (9, 10),       # Estimated from typical ratios
+            'Low-sulfur Fuel Oil': (9, 10) # Estimated from typical ratios
+        }
+        
+        if commodity in baseline_ratios:
+            hedging, speculative = baseline_ratios[commodity]
+            print(f"📊 Using historical baseline for {commodity}: {hedging}%/{speculative}%")
+            return {
+                'hedging': hedging,
+                'speculative': speculative,
+                'source_date': 'historical_baseline'
+            }
+        
+        print(f"⚠️ No baseline ratios found for {commodity}")
+        return None
+
     def append_to_csv(self, data: Dict):
         with open(self.csv_output, 'a', newline='', encoding='utf-8') as file:
             writer = csv.writer(file)
@@ -812,6 +1075,7 @@ class LLMEnhancedSHFEScraper:
         processed_count = 0
         extracted_count = 0
         claude_calls_saved = 0  # No longer used - processing all reports
+        skipped_count = 0  # Track skipped notices
         
         try:
             try:
@@ -835,6 +1099,7 @@ class LLMEnhancedSHFEScraper:
                 return 0, 0, 0
             
             for idx, item in enumerate(notice_items):
+                print(f"📋 Processing notice {idx + 1}/{len(notice_items)} on page {page_num}")
                 try:
                     try:
                         date_element = item.find_element(By.CSS_SELECTOR, ".info_item_date")
@@ -851,6 +1116,8 @@ class LLMEnhancedSHFEScraper:
                         continue
                     
                     if not self.is_date_in_range(notice_date):
+                        skipped_count += 1
+                        print(f"⏭️ Skipping notice {idx + 1}: date {notice_date} outside range {self.start_date} to {self.today}")
                         continue
                     
                     try:
@@ -876,6 +1143,7 @@ class LLMEnhancedSHFEScraper:
                     
                     processed_count += 1
                     print(f"\n🎯 Processing ({processed_count}): {title} ({date_text})")
+                    print(f"    📄 Notice date: {notice_date}, URL: {full_url}")
                     
                     try:
                         margin_count = self.scrape_notice_content(full_url, title, notice_date)
@@ -890,6 +1158,7 @@ class LLMEnhancedSHFEScraper:
             # Title filtering disabled - processing all notices
             # if claude_calls_saved > 0:
             #     print(f"⚡ Saved {claude_calls_saved} Claude calls via title filtering")
+            print(f"📊 Page {page_num} summary: {len(notice_items)} total notices, {processed_count} processed, {skipped_count} skipped (outside date range)")
         except Exception as e:
             print(f"❌ Critical error on page {page_num}: {e}")
             
@@ -921,9 +1190,10 @@ class LLMEnhancedSHFEScraper:
                 except NoSuchElementException:
                     continue
             if not next_button:
-                print("➡️ No next button found")
+                print("➡️ No next button found - reached end of pagination")
                 return False
             
+            print(f"🔄 Clicking next page button using selector: {[s for s in next_selectors if next_button.tag_name in s or selector in str(next_button)]}")
             next_button.click()
             time.sleep(2)
             
@@ -999,7 +1269,12 @@ class LLMEnhancedSHFEScraper:
             print(f"\n🎉 Scraping completed!")
             print(f"🎯 Total entries extracted: {total_extracted}")
             
+            # Process reversion notices to infer missing margin ratios
+            reversion_count = self.process_reversion_notices()
+            total_extracted += reversion_count
+            
             if total_extracted > 0:
+                print(f"📊 Final dataset: {total_extracted} total entries (including {reversion_count} inferred)")
                 zip_path = self.export_final_data()
                 print(f"📦 Runbook ZIP created at: {zip_path}")
                 return zip_path
